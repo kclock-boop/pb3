@@ -1,0 +1,10 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import generate from '../netlify/functions/generate.mjs';
+const env={SUPABASE_URL:'https://test.supabase.co',SUPABASE_PUBLISHABLE_KEY:'public',OPENAI_API_KEY:'secret'};globalThis.Netlify={env:{get:k=>env[k]}};
+const req=(data={},token='Bearer user')=>new Request('https://example.com/.netlify/functions/generate',{method:'POST',headers:{Authorization:token},body:JSON.stringify(data)});
+const data={title:'컴퓨터 구매',reason:'노후 컴퓨터 교체',category:'구매'};
+test('rejects missing authentication',async()=>assert.equal((await generate(req(data,''))).status,401));
+test('rejects non-member',async()=>{globalThis.fetch=async()=>Response.json({app_metadata:{}});assert.equal((await generate(req(data))).status,403)});
+test('rejects malformed data',async()=>{globalThis.fetch=async()=>Response.json({app_metadata:{org_id:'company-main'}});assert.equal((await generate(req({title:'',reason:'a',category:'구매'}))).status,400)});
+test('structured generation sends facts only and disables storage',async()=>{let calls=0;globalThis.fetch=async(url,opt)=>{calls++;if(calls===1)return Response.json({app_metadata:{org_id:'company-main'}});const b=JSON.parse(opt.body);assert.equal(b.store,false);assert.equal(b.text.format.strict,true);assert.deepEqual(JSON.parse(b.input),data);return Response.json({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify({title:'컴퓨터 구매',purpose:'노후 교체',details:'구매',spec:'[확인 필요]',effect:'효율 개선 제안'})}]}]})};const r=await generate(req(data));assert.equal(r.status,200);assert.equal((await r.json()).spec,'[확인 필요]')});
+test('upstream failure returns user-safe error',async()=>{let n=0;globalThis.fetch=async()=>++n===1?Response.json({app_metadata:{org_id:'company-main'}}):new Response('secret',{status:429});const r=await generate(req(data));assert.equal(r.status,502);assert.ok(!(await r.text()).includes('secret'))});
+test('rejects incomplete AI output',async()=>{let n=0;globalThis.fetch=async()=>++n===1?Response.json({app_metadata:{org_id:'company-main'}}):Response.json({status:'incomplete'});assert.equal((await generate(req(data))).status,502)});
